@@ -2,35 +2,16 @@
 const functions = require('@google-cloud/functions-framework');
 const https = require('https');
 const crypto = require('crypto');
-const { VertexAI } = require('@google-cloud/vertexai');
 
-// ===== 環境変数 =====
-const TOKEN = process.env.LINE_ACCESS_TOKEN;        // LINEチャネルアクセストークン
-const CHANNEL_SECRET = process.env.LINE_CHANNEL_SECRET; // LINEチャネルシークレット
-const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-1.5-flash';
-const GEMINI_LOCATION = process.env.GEMINI_LOCATION || 'asia-northeast1';
-const GEMINI_TEMPERATURE = Number(process.env.GEMINI_TEMPERATURE || 0.7);
-const GEMINI_MAX_TOKENS = Number(process.env.GEMINI_MAX_TOKENS || 400);
-const SYSTEM_PROMPT =
-  process.env.SYSTEM_PROMPT ||
-  'You are a concise assistant. Reply briefly for mobile chat in the user’s language.';
-
-// ===== VertexAI (Gemini) クライアント =====
-const vertex = new VertexAI({
-  project: process.env.GOOGLE_CLOUD_PROJECT,
-  location: GEMINI_LOCATION,
-});
-function getModel(modelName) {
-  return vertex.getGenerativeModel({
-    model: modelName,
-    systemInstruction: SYSTEM_PROMPT,
-  });
-}
+// ★ 環境変数
+const TOKEN = process.env.LINE_ACCESS_TOKEN;        // チャネルアクセストークン（長期）
+const CHANNEL_SECRET = process.env.LINE_CHANNEL_SECRET; // チャネルシークレット
 
 // --- 署名検証（X-Line-Signature） ---
 function verifySignature(req) {
   try {
     const signature = req.get('x-line-signature') || '';
+    // functions-framework 環境では rawBody が入る（なければ body から生成）
     const raw = req.rawBody ? req.rawBody : Buffer.from(JSON.stringify(req.body));
     const expected = crypto.createHmac('sha256', CHANNEL_SECRET)
       .update(raw)
@@ -44,11 +25,15 @@ function verifySignature(req) {
 
 // --- LINE 返信 ---
 function reply(replyToken, text) {
-  if (!TOKEN) return Promise.resolve();
+  if (!TOKEN) {
+    console.error('Missing env LINE_ACCESS_TOKEN');
+    return Promise.resolve(); // WebhookはACK優先なので失敗でも200返す
+  }
   const payload = JSON.stringify({
     replyToken,
     messages: [{ type: 'text', text }],
   });
+
   const opt = {
     hostname: 'api.line.me',
     path: '/v2/bot/message/reply',
@@ -59,10 +44,20 @@ function reply(replyToken, text) {
       'Content-Length': Buffer.byteLength(payload),
     },
   };
+
   return new Promise((resolve) => {
     const rq = https.request(opt, (rs) => {
-      rs.on('data', () => {}); // 読み捨て
-      rs.on('end', () => resolve());
+      const chunks = [];
+      rs.on('data', (c) => chunks.push(c));
+      rs.on('end', () => {
+        const body = Buffer.concat(chunks).toString();
+        if (rs.statusCode !== 200) {
+          console.error('line-reply-non200', { status: rs.statusCode, body });
+        } else {
+          console.log('line-reply-200');
+        }
+        resolve();
+      });
     });
     rq.on('error', (err) => {
       console.error('line-reply-error', err);
@@ -73,57 +68,39 @@ function reply(replyToken, text) {
   });
 }
 
-// --- Gemini 呼び出し ---
-async function askGemini(userText, modelName) {
-  const model = getModel(modelName);
-  const resp = await model.generateContent({
-    contents: [{ role: 'user', parts: [{ text: userText }] }],
-    generationConfig: {
-      temperature: GEMINI_TEMPERATURE,
-      maxOutputTokens: GEMINI_MAX_TOKENS,
-    },
-  });
-  return resp.response?.candidates?.[0]?.content?.parts?.map(p => p.text).join('') ?? '';
-}
-
 // --- エンドポイント本体 ---
 functions.http('webhook', async (req, res) => {
+  // ヘルスチェック
   if (req.method === 'GET') return res.status(200).send('OK');
+
+  // POST以外は200でACK（LINE検証や空POSTも成功させる）
   if (req.method !== 'POST') return res.status(200).send('OK');
 
-  if (!verifySignature(req)) return res.status(401).send('unauthorized');
+  // 署名検証（本番必須）
+  if (!verifySignature(req)) {
+    // 署名不一致は401を返す（LINEは再送することがあります）
+    return res.status(401).send('unauthorized');
+  }
 
   const events = req.body?.events;
   if (!Array.isArray(events)) return res.status(200).send('OK');
 
+  // 各イベント処理
   await Promise.all(
     events.map(async (ev) => {
-      if (ev?.deliveryContext?.isRedelivery) return;
-
+      // 再送（Redelivery）は無視して冪等性を確保
+      if (ev?.deliveryContext?.isRedelivery) {
+        console.log('skip-redelivery', ev?.message?.id || ev?.replyToken);
+        return;
+      }
+      // テキストのみエコー
       if (ev.type === 'message' && ev.message?.type === 'text') {
-        const text = ev.message.text.trim();
-
-        // echo: はそのまま返す
-        if (text.toLowerCase().startsWith('echo:')) {
-          const echoed = text.slice(5).trim() || '(empty)';
-          return reply(ev.replyToken, echoed);
-        }
-
-        // pro: は gemini-1.5-pro
-        const wantPro = text.toLowerCase().startsWith('pro:');
-        const textForAI = wantPro ? text.slice(4).trim() : text;
-        const modelName = wantPro ? 'gemini-1.5-pro' : GEMINI_MODEL;
-
-        try {
-          const aiText = await askGemini(textForAI, modelName);
-          return reply(ev.replyToken, aiText || '（AIなし：seoul-new）');
-        } catch (e) {
-          console.error('Gemini error', e);
-          return reply(ev.replyToken, 'ただいまAI応答でエラーが発生しています。');
-        }
+        const text = `Echo: ${ev.message.text}`;
+        await reply(ev.replyToken, text);
       }
     })
   ).catch((e) => console.error('handler-error', e));
 
+  // Webhookは常に200でACK
   return res.status(200).send('OK');
 });
