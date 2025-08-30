@@ -1,6 +1,13 @@
 const functions = require('@google-cloud/functions-framework');
 const https = require('https');
 
+const TOKEN = process.env.LINE_ACCESS_TOKEN; // ← 環境変数で管理推奨
+
+functions.http('helloWorld', async (req, res) => {
+  if (req.method === 'GET') return res.status(200).send('OK');
+  if (req.method !== 'POST' || !req.body || !Array.isArray(req.body.events)) {
+    return res.status(200).send('OK');
+
 // LINEの長期アクセストークン（最新に差し替え）
 const LINE_ACCESS_TOKEN = 'AuCCaWUqCo5ZGG+ANwEy+KrNziz2sLG+8gFRJrjdak3H0BpdTfipVfdXcn6opp9FB2tCb3Ma3EWBCeMZadQ7MUHwKl0EL1muoSLyy6VtskjN5lD8Vp6fbT5HkQpXxw8Xy2ZUUnTBRaq/8AiMId0b3wdB04t89/1O/w1cDnyilFU=';
 
@@ -38,3 +45,4 @@ function reply(replyToken, text) {
     rq.on('error', reject); rq.write(data); rq.end();
   });
 }
+
