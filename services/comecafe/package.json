@@ -1,9 +1,13 @@
 {
-  "name": "line-bot-reply-comecafe",
+  "name": "line-bot-reply-seoul-akikosan",
   "version": "1.0.0",
   "private": true,
   "engines": { "node": ">=18" },
-  "dependencies": { "functions-framework": "^3.4.0" },
-  "scripts": { "start": "functions-framework --target=webhook --port=8080" }
-  
+  "dependencies": {
+    "@line/bot-sdk": "^7.5.2",
+    "functions-framework": "^3.4.0"
+  },
+  "scripts": {
+    "start": "functions-framework --target=webhook --port=8080"
+  }
 }
