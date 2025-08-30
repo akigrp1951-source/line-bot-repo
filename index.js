@@ -2,11 +2,11 @@ const functions = require('@google-cloud/functions-framework');
 const line = require('@line/bot-sdk');
 const { GoogleAuth } = require('google-auth-library');
 const { google } = require('googleapis');
-const { VertexAI } = require('@google-cloud/vertexai');
+const { VertexAI } = require('@google-cloud/vertexai'); // 忘れずにインポート
 
 // --- 設定項目 ---
 const LINE_CONFIG = {
-  channelAccessToken: 'AuCCaWUqCo5ZGG+ANwEy+KrNziz2sLG+8gFRJrjdak3H0BpdTfipVfdXcn6opp9FB2tCb3Ma3EWBCeMZadQ7MUHwKl0EL1muoSLyy6VtskjN5lD8Vp6fbT5HkQpXxw8Xy2ZUUnTBRaq/8AiMId0b3wdB04t89/1O/w1cDnyilFU=',
+  channelAccessToken: process.env.CHANNEL_ACCESS_TOKEN || 'YOUR_CHANNEL_ACCESS_TOKEN',
 };
 
 const DRIVE_CONFIG = {
@@ -15,63 +15,29 @@ const DRIVE_CONFIG = {
 };
 
 const GCP_PROJECT_ID = 'ak-group-line-bot-470510';
-const GCP_REGION = 'asia-northeast3';
+const GCP_REGION = 'asia-northeast3'; // リージョンを seoul に合わせる
 // --- 設定ここまで ---
 
-console.log('[起動] スクリプト開始');
-
 const lineClient = new line.Client(LINE_CONFIG);
-console.log('[起動] LINEクライアント初期化完了');
-
-const auth = new GoogleAuth({
-  scopes: [
-    'https://www.googleapis.com/auth/drive.readonly',
-    'https://www.googleapis.com/auth/spreadsheets.readonly',
-    'https://www.googleapis.com/auth/cloud-platform'
-  ],
-  projectId: GCP_PROJECT_ID,
-} );
-console.log('[起動] GoogleAuthクライアント初期化完了');
-
-const drive = google.drive({ version: 'v3', auth });
-const sheets = google.sheets({ version: 'v4', auth });
-console.log('[起動] Drive/Sheets APIクライアント初期化完了');
-
-const vertex_ai = new VertexAI({project: GCP_PROJECT_ID, location: GCP_REGION});
-const model_instance = vertex_ai.getGenerativeModel({
-    model: 'gemini-1.0-pro',
-});
-console.log('[起動] VertexAIクライアント初期化完了');
-
 
 // --- メイン処理 ---
-functions.http('helloWorld', async (req, res  ) => {
-  console.log('[メイン] Webhookリクエスト受信');
-  if (req.method !== 'POST') {
-    console.error('[メイン] POST以外のメソッドです');
-    return res.status(405).send('Method Not Allowed');
-  }
+functions.http('helloWorld', async (req, res ) => {
+  console.log('Webhook received:', JSON.stringify(req.body));
   try {
-    console.log('[メイン] イベント処理を開始します', JSON.stringify(req.body));
     await Promise.all(req.body.events.map(handleEvent));
-    console.log('[メイン] すべてのイベント処理が完了しました');
     res.status(200).send('OK');
   } catch (err) {
-    console.error('[メイン] Webhook Error:', err);
+    console.error('Webhook Error:', err.stack || err);
     res.status(500).send('Error');
   }
 });
 
 // --- イベントごとの処理 ---
 async function handleEvent(event) {
-  console.log(`[イベント] handleEvent開始: type=${event.type}`);
   if (event.type !== 'message' || event.message.type !== 'text') {
-    console.log('[イベント] テキストメッセージではないため処理をスキップします');
     return;
   }
-  
   const text = event.message.text.trim();
-  console.log(`[イベント] 受信テキスト: "${text}"`);
   let replyText = '';
 
   try {
@@ -82,95 +48,147 @@ async function handleEvent(event) {
       const keyword = text.replace(/^#レシピ\s*/, '').trim();
       replyText = await handleRecipe(keyword);
     } else {
-      console.log('[イベント] キーワードに一致しませんでした');
       replyText = "使い方:\n・「#在庫 (商品名)」\n・「#在庫 警戒」\n・「#レシピ (料理名)」";
     }
-
-    console.log(`[イベント] 返信内容: "${replyText.substring(0, 50)}..."`);
     await lineClient.replyMessage(event.replyToken, { type: 'text', text: replyText });
-    console.log('[イベント] LINEへの返信が成功しました');
-
   } catch (err) {
-    console.error('[イベント] Handle Event Error:', err);
-    try {
-      await lineClient.replyMessage(event.replyToken, { type: 'text', text: '内部処理でエラーが発生しました。' });
-    } catch (replyErr) {
-      console.error('[イベント] エラー通知の返信にも失敗しました:', replyErr);
-    }
+    console.error('Handle Event Error:', err.stack || err);
+    // ユーザーには汎用的なエラーメッセージを返す
+    await lineClient.replyMessage(event.replyToken, { type: 'text', text: '処理中にエラーが発生しました。詳細はログを確認してください。' });
   }
 }
 
 // --- 在庫検索 ---
 async function handleInventory(keyword) {
-  console.log(`[在庫] handleInventory開始: キーワード="${keyword}"`);
-  // ... (在庫機能は省略)
-  return `在庫機能は現在デバッグのため停止中です。`;
+  try {
+    const auth = new GoogleAuth({
+      scopes: ['https://www.googleapis.com/auth/spreadsheets.readonly'],
+      projectId: GCP_PROJECT_ID,
+    } );
+    const sheets = google.sheets({ version: 'v4', auth });
+
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: DRIVE_CONFIG.inventorySheetId,
+      range: 'シート1',
+    });
+    const rows = response.data.values;
+    if (!rows || rows.length === 0) return '在庫データがありません。';
+    
+    const header = rows[0];
+    const data = rows.slice(1);
+    const idx = { name: header.indexOf("商品名"), stock: header.indexOf("在庫"), par: header.indexOf("最低在庫") };
+
+    let results = data;
+    if (keyword && keyword !== '全体' && keyword !== '警戒') {
+      results = data.filter(r => String(r[idx.name]).includes(keyword));
+    } else if (keyword === '警戒') {
+      results = data.filter(r => Number(r[idx.stock]) < Number(r[idx.par]));
+    }
+
+    if (!results.length) return '該当する在庫はありません。';
+    
+    const lines = results.map(r => {
+      const mark = Number(r[idx.stock]) < Number(r[idx.par]) ? '⚠️' : '✅';
+      return `${mark} ${r[idx.name]}: ${r[idx.stock]} (最低${r[idx.par]})`;
+    });
+    return lines.slice(0, 40).join('\n');
+  } catch (err) {
+    console.error('Inventory Error:', err.stack || err);
+    throw new Error('在庫情報の取得に失敗しました。');
+  }
 }
 
 // --- レシピ検索 ---
 async function handleRecipe(keyword) {
-  console.log(`[レシピ] handleRecipe開始: キーワード="${keyword}"`);
-  if (!keyword) {
-    console.log('[レシピ] キーワードが空です');
-    return '料理名を指定してください。';
-  }
+  if (!keyword) return '料理名を指定してください。';
   try {
+    console.log(`レシピ検索開始: "${keyword}"`);
     const file = await findRecipeFile(keyword);
     if (!file) {
-      console.log('[レシピ] ファイルが見つかりませんでした');
+      console.log('レシピファイルが見つかりませんでした。');
       return '該当するレシピが見つかりませんでした。';
     }
-    console.log(`[レシピ] ファイル発見: ${file.name}`);
+    console.log(`ファイル発見: ${file.name} (ID: ${file.id})`);
 
     const content = await getFileContent(file.id);
     if (!content) {
-      console.log('[レシピ] ファイル内容が空でした');
+      console.log('ファイルの内容が空または取得できませんでした。');
       return `【${file.name}】\n\n(本文を読めない形式です)\n${file.webViewLink}`;
     }
-    console.log(`[レシピ] ファイル内容取得完了。文字数: ${content.length}`);
+    console.log(`ファイル内容取得完了。文字数: ${content.length}`);
 
     const summary = await summarizeText(content);
-    console.log(`[レシピ] AI要約完了`);
-
+    console.log(`AI要約完了: ${summary}`);
+    
     return `【${file.name}】\n\n【AI要約】\n${summary}\n\nリンク:\n${file.webViewLink}`;
   } catch (err) {
-    console.error('[レシピ] Recipe Error:', err.message, err.stack);
-    return 'レシピの検索・要約中にエラーが発生しました。';
+    console.error('Recipe Error:', err.stack || err);
+    // エラーオブジェクト全体をログに出力
+    console.error('Full Recipe Error Object:', JSON.stringify(err, null, 2));
+    throw new Error('レシピの検索・要約中にエラーが発生しました。');
   }
 }
 
 async function findRecipeFile(keyword) {
-  const query = `'${DRIVE_CONFIG.recipeFolderId}' in parents and name contains '${keyword}' and trashed = false`;
-  console.log(`[Drive] findRecipeFile実行。クエリ: ${query}`);
+  const auth = new GoogleAuth({
+    scopes: ['https://www.googleapis.com/auth/drive.readonly'],
+    projectId: GCP_PROJECT_ID,
+  } );
+  const drive = google.drive({ version: 'v3', auth });
   const response = await drive.files.list({
-    q: query,
+    q: `'${DRIVE_CONFIG.recipeFolderId}' in parents and name contains '${keyword}' and trashed = false`,
     fields: 'files(id, name, webViewLink)',
     pageSize: 1,
   });
-  console.log(`[Drive] API応答: ${JSON.stringify(response.data)}`);
   return response.data.files[0];
 }
 
 async function getFileContent(fileId) {
-  console.log(`[Drive] getFileContent実行。FileID: ${fileId}`);
+   const auth = new GoogleAuth({
+    scopes: ['https://www.googleapis.com/auth/drive.readonly'],
+    projectId: GCP_PROJECT_ID,
+  } );
+  const drive = google.drive({ version: 'v3', auth });
   const response = await drive.files.export({ fileId, mimeType: 'text/plain' });
-  console.log(`[Drive] export API応答ステータス: ${response.status}`);
   return response.data;
 }
 
-// --- AI要約 ---
 async function summarizeText(text) {
-    const prompt = `以下のレシピ内容を、重要な材料と手順のポイントがわかるように150字程度で簡潔に要約してください。\n\n---\n${text}`;
-    console.log(`[VertexAI] summarizeText実行。プロンプト文字数: ${prompt.length}`);
-    try {
-        const result = await model_instance.generateContent(prompt);
-        console.log('[VertexAI] generateContent API応答あり');
-        const response = result.response;
-        const summary = response.candidates[0].content.parts[0].text;
-        console.log(`[VertexAI] 要約取得成功`);
-        return summary;
-    } catch (err) {
-        console.error('[VertexAI] Summarize Error:', err);
-        throw new Error('AIによる要約に失敗しました。');
+  try {
+    console.log('VertexAIクライアント初期化開始...');
+    const vertex_ai = new VertexAI({ project: GCP_PROJECT_ID, location: GCP_REGION });
+    console.log('VertexAIクライアント初期化完了。');
+
+    const model = 'gemini-1.0-pro';
+    console.log(`使用モデル: ${model}`);
+
+    const generativeModel = vertex_ai.getGenerativeModel({ model: model });
+    console.log('生成モデル取得完了。');
+
+    const request = {
+      contents: [{
+        role: "user",
+        parts: [{ text: `以下のレシピ内容を、重要な材料と手順のポイントがわかるように150字程度で簡潔に要約してください。\n\n---\n${text}` }]
+      }]
+    };
+    console.log('コンテンツ生成リクエスト準備完了。');
+
+    const result = await generativeModel.generateContent(request);
+    console.log('コンテンツ生成レスポンス受信。');
+    
+    const response = result.response;
+    console.log('Full AI Response:', JSON.stringify(response, null, 2));
+
+    if (!response.candidates || response.candidates.length === 0 || !response.candidates[0].content || !response.candidates[0].content.parts || response.candidates[0].content.parts.length === 0) {
+        console.error('AIからの応答形式が不正です。');
+        throw new Error('AIからの応答形式が不正です。');
     }
+
+    return response.candidates[0].content.parts[0].text;
+
+  } catch (err) {
+    console.error('Summarize Error:', err.stack || err);
+    console.error('Full Summarize Error Object:', JSON.stringify(err, null, 2));
+    throw new Error('AIによる要約に失敗しました。');
+  }
 }
