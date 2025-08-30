@@ -4,7 +4,6 @@ const https = require('https');
 const crypto = require('crypto');
 const { VertexAI } = require('@google-cloud/vertexai');
 
-// ===== env =====
 const TOKEN = process.env.LINE_ACCESS_TOKEN;
 const CHANNEL_SECRET = process.env.LINE_CHANNEL_SECRET;
 const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-1.5-flash';
@@ -15,11 +14,9 @@ const SYSTEM_PROMPT =
   process.env.SYSTEM_PROMPT ||
   'You are a concise assistant. Reply briefly for mobile chat in the user’s language.';
 
-// ===== Vertex AI =====
 const vertex = new VertexAI({ project: process.env.GOOGLE_CLOUD_PROJECT, location: GEMINI_LOCATION });
 const getModel = (name) => vertex.getGenerativeModel({ model: name, systemInstruction: SYSTEM_PROMPT });
 
-// helpers
 const isDummyReplyToken = (t) => !t || t === '00000000000000000000000000000000';
 function verifySignature(req) {
   try {
@@ -64,7 +61,6 @@ async function askGemini(userText, modelName) {
   return resp.response?.candidates?.[0]?.content?.parts?.map(p => p.text).join('') ?? '';
 }
 
-// entry
 functions.http('webhook', async (req, res) => {
   if (req.method === 'GET') return res.status(200).send('OK');
   if (req.method !== 'POST') return res.status(200).send('OK');
@@ -80,19 +76,17 @@ functions.http('webhook', async (req, res) => {
     if (ev.type === 'message' && ev.message?.type === 'text') {
       const text = (ev.message.text || '').trim();
 
-      // echo: はそのまま返す
       if (text.toLowerCase().startsWith('echo:')) {
         return reply(ev.replyToken, text.slice(5).trim() || '(empty)');
       }
 
-      // pro: は pro に切替
       const wantPro = text.toLowerCase().startsWith('pro:');
       const q = wantPro ? text.slice(4).trim() : text;
       const modelName = wantPro ? 'gemini-1.5-pro' : GEMINI_MODEL;
 
       try {
         const aiText = await askGemini(q, modelName);
-        return reply(ev.replyToken, aiText || '（AIなし：seoul-gemini）'); // ←反映確認用
+        return reply(ev.replyToken, aiText || '（AIなし：seoul-gemini）'); // 反映確認用
       } catch (e) {
         console.error('Gemini error', e);
         return reply(ev.replyToken, 'ただいまAI応答でエラーが発生しています。');
