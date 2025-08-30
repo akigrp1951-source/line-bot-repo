@@ -15,13 +15,14 @@ const DRIVE_CONFIG = {
 };
 
 const GCP_PROJECT_ID = 'ak-group-line-bot-470510';
-// 【重要】Cloud Runのサービスを作成するリージョンに合わせてください
-const GCP_REGION = 'asia-northeast3'; // 例: 'asia-northeast3' (ソウル) または 'us-central1' (アイオワ)
+const GCP_REGION = 'asia-northeast3';
 // --- 設定ここまで ---
 
-const lineClient = new line.Client(LINE_CONFIG);
+console.log('[起動] スクリプト開始');
 
-// Google APIの認証クライアントを初期化
+const lineClient = new line.Client(LINE_CONFIG);
+console.log('[起動] LINEクライアント初期化完了');
+
 const auth = new GoogleAuth({
   scopes: [
     'https://www.googleapis.com/auth/drive.readonly',
@@ -30,37 +31,47 @@ const auth = new GoogleAuth({
   ],
   projectId: GCP_PROJECT_ID,
 } );
+console.log('[起動] GoogleAuthクライアント初期化完了');
 
 const drive = google.drive({ version: 'v3', auth });
 const sheets = google.sheets({ version: 'v4', auth });
+console.log('[起動] Drive/Sheets APIクライアント初期化完了');
 
-// VertexAIクライアントの初期化
 const vertex_ai = new VertexAI({project: GCP_PROJECT_ID, location: GCP_REGION});
 const model_instance = vertex_ai.getGenerativeModel({
     model: 'gemini-1.0-pro',
 });
+console.log('[起動] VertexAIクライアント初期化完了');
 
 
 // --- メイン処理 ---
 functions.http('helloWorld', async (req, res  ) => {
+  console.log('[メイン] Webhookリクエスト受信');
   if (req.method !== 'POST') {
+    console.error('[メイン] POST以外のメソッドです');
     return res.status(405).send('Method Not Allowed');
   }
   try {
+    console.log('[メイン] イベント処理を開始します', JSON.stringify(req.body));
     await Promise.all(req.body.events.map(handleEvent));
+    console.log('[メイン] すべてのイベント処理が完了しました');
     res.status(200).send('OK');
   } catch (err) {
-    console.error('Webhook Error:', err);
+    console.error('[メイン] Webhook Error:', err);
     res.status(500).send('Error');
   }
 });
 
 // --- イベントごとの処理 ---
 async function handleEvent(event) {
+  console.log(`[イベント] handleEvent開始: type=${event.type}`);
   if (event.type !== 'message' || event.message.type !== 'text') {
+    console.log('[イベント] テキストメッセージではないため処理をスキップします');
     return;
   }
+  
   const text = event.message.text.trim();
+  console.log(`[イベント] 受信テキスト: "${text}"`);
   let replyText = '';
 
   try {
@@ -71,111 +82,95 @@ async function handleEvent(event) {
       const keyword = text.replace(/^#レシピ\s*/, '').trim();
       replyText = await handleRecipe(keyword);
     } else {
+      console.log('[イベント] キーワードに一致しませんでした');
       replyText = "使い方:\n・「#在庫 (商品名)」\n・「#在庫 警戒」\n・「#レシピ (料理名)」";
     }
+
+    console.log(`[イベント] 返信内容: "${replyText.substring(0, 50)}..."`);
     await lineClient.replyMessage(event.replyToken, { type: 'text', text: replyText });
+    console.log('[イベント] LINEへの返信が成功しました');
+
   } catch (err) {
-    console.error('Handle Event Error:', err);
-    await lineClient.replyMessage(event.replyToken, { type: 'text', text: '処理中にエラーが発生しました。' });
+    console.error('[イベント] Handle Event Error:', err);
+    try {
+      await lineClient.replyMessage(event.replyToken, { type: 'text', text: '内部処理でエラーが発生しました。' });
+    } catch (replyErr) {
+      console.error('[イベント] エラー通知の返信にも失敗しました:', replyErr);
+    }
   }
 }
 
 // --- 在庫検索 ---
 async function handleInventory(keyword) {
-  try {
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId: DRIVE_CONFIG.inventorySheetId,
-      range: 'シート1',
-    });
-    const rows = response.data.values;
-    if (!rows || rows.length === 0) return '在庫データがありません。';
-    
-    const header = rows[0];
-    const data = rows.slice(1);
-    const idx = { name: header.indexOf("商品名"), stock: header.indexOf("在庫"), par: header.indexOf("最低在庫") };
-
-    let results = data;
-    if (keyword && keyword !== '全体' && keyword !== '警戒') {
-      results = data.filter(r => String(r[idx.name]).includes(keyword));
-    } else if (keyword === '警戒') {
-      results = data.filter(r => Number(r[idx.stock]) < Number(r[idx.par]));
-    }
-
-    if (!results.length) return '該当する在庫はありません。';
-    
-    const lines = results.map(r => {
-      const mark = Number(r[idx.stock]) < Number(r[idx.par]) ? '⚠️' : '✅';
-      return `${mark} ${r[idx.name]}: ${r[idx.stock]} (最低${r[idx.par]})`;
-    });
-    return lines.slice(0, 40).join('\n');
-  } catch (err) {
-    console.error('Inventory Error:', err.message);
-    return '在庫情報の取得に失敗しました。APIが有効か、シート名が正しいか確認してください。';
-  }
+  console.log(`[在庫] handleInventory開始: キーワード="${keyword}"`);
+  // ... (在庫機能は省略)
+  return `在庫機能は現在デバッグのため停止中です。`;
 }
-
 
 // --- レシピ検索 ---
 async function handleRecipe(keyword) {
-  if (!keyword) return '料理名を指定してください。';
+  console.log(`[レシピ] handleRecipe開始: キーワード="${keyword}"`);
+  if (!keyword) {
+    console.log('[レシピ] キーワードが空です');
+    return '料理名を指定してください。';
+  }
   try {
-    console.log(`[デバッグ] レシピ検索を開始します。キーワード: ${keyword}`);
     const file = await findRecipeFile(keyword);
-
     if (!file) {
-      console.log('[デバッグ] findRecipeFileでファイルが見つかりませんでした。');
+      console.log('[レシピ] ファイルが見つかりませんでした');
       return '該当するレシピが見つかりませんでした。';
     }
-    console.log(`[デバッグ] ファイルが見つかりました: ${file.name} (ID: ${file.id})`);
+    console.log(`[レシピ] ファイル発見: ${file.name}`);
 
     const content = await getFileContent(file.id);
     if (!content) {
-      console.log('[デバッグ] getFileContentで本文を取得できませんでした。');
+      console.log('[レシピ] ファイル内容が空でした');
       return `【${file.name}】\n\n(本文を読めない形式です)\n${file.webViewLink}`;
     }
-    console.log('[デバッグ] ファイル本文を取得しました。AI要約を開始します。');
+    console.log(`[レシピ] ファイル内容取得完了。文字数: ${content.length}`);
 
     const summary = await summarizeText(content);
-    console.log('[デバッグ] AI要約が完了しました。');
-    
-    const reply = `【${file.name}】\n\n【AI要約】\n${summary}\n\nリンク:\n${file.webViewLink}`;
-    console.log('[デバッグ] 返信メッセージを作成しました。');
-    return reply;
+    console.log(`[レシピ] AI要約完了`);
 
+    return `【${file.name}】\n\n【AI要約】\n${summary}\n\nリンク:\n${file.webViewLink}`;
   } catch (err) {
-    console.error('Recipe Error:', err.message);
-    // エラーの詳細もログに出力
-    if (err.stack) {
-        console.error(err.stack);
-    }
+    console.error('[レシピ] Recipe Error:', err.message, err.stack);
     return 'レシピの検索・要約中にエラーが発生しました。';
   }
 }
 
 async function findRecipeFile(keyword) {
-  console.log(`[デバッグ] Drive APIを呼び出します。q: '${DRIVE_CONFIG.recipeFolderId}' in parents and name contains '${keyword}'`);
+  const query = `'${DRIVE_CONFIG.recipeFolderId}' in parents and name contains '${keyword}' and trashed = false`;
+  console.log(`[Drive] findRecipeFile実行。クエリ: ${query}`);
   const response = await drive.files.list({
-    q: `'${DRIVE_CONFIG.recipeFolderId}' in parents and name contains '${keyword}' and trashed = false`,
+    q: query,
     fields: 'files(id, name, webViewLink)',
     pageSize: 1,
   });
-  console.log(`[デバッグ] Drive APIの応答: ${JSON.stringify(response.data)}`);
+  console.log(`[Drive] API応答: ${JSON.stringify(response.data)}`);
   return response.data.files[0];
 }
 
+async function getFileContent(fileId) {
+  console.log(`[Drive] getFileContent実行。FileID: ${fileId}`);
+  const response = await drive.files.export({ fileId, mimeType: 'text/plain' });
+  console.log(`[Drive] export API応答ステータス: ${response.status}`);
+  return response.data;
+}
 
 // --- AI要約 ---
 async function summarizeText(text) {
     const prompt = `以下のレシピ内容を、重要な材料と手順のポイントがわかるように150字程度で簡潔に要約してください。\n\n---\n${text}`;
-
+    console.log(`[VertexAI] summarizeText実行。プロンプト文字数: ${prompt.length}`);
     try {
         const result = await model_instance.generateContent(prompt);
+        console.log('[VertexAI] generateContent API応答あり');
         const response = result.response;
-        return response.candidates[0].content.parts[0].text;
-
+        const summary = response.candidates[0].content.parts[0].text;
+        console.log(`[VertexAI] 要約取得成功`);
+        return summary;
     } catch (err) {
-        console.error('Summarize Error:', err);
+        console.error('[VertexAI] Summarize Error:', err);
         throw new Error('AIによる要約に失敗しました。');
     }
 }
-
