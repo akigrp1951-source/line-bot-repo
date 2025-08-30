@@ -116,7 +116,7 @@ functions.http('webhook', async (req, res) => {
 
         try {
           const aiText = await askGemini(textForAI, modelName);
-          return reply(ev.replyToken, aiText || '（応答を生成できませんでした）');
+          return reply(ev.replyToken, aiText || '（AIなし：seoul-new）');
         } catch (e) {
           console.error('Gemini error', e);
           return reply(ev.replyToken, 'ただいまAI応答でエラーが発生しています。');
