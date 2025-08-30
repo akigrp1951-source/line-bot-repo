@@ -132,16 +132,32 @@ async function getFileContent(fileId) {
 }
 
 async function summarizeText(text) {
-  // ... (省略) ...
-  const model = 'gemini-1.0-pro';
-  const generativeModel = vertex_ai.getGenerativeModel({ model: model });
-  const request = {
-    contents: [{ role: "user", parts: [{ text: `以下のレシピ内容を、重要な材料と手順のポイントがわかるように150字程度で簡潔に要約してください。\n\n---\n${text}` }] }]
-  };
-  const result = await generativeModel.generateContent(request);
-  const response = result.response;
-  if (!response.candidates?.[0]?.content?.parts?.[0]?.text) {
-      throw new Error('AIからの応答形式が不正です。');
-  }
-  return response.candidates[0].content.parts[0].text;
+    const modelName = `projects/${GCP_PROJECT_ID}/locations/${GCP_REGION}/publishers/google/models/gemini-1.5-flash-001`;
+
+    // APIに渡すリクエストボディ
+    const request = {
+        contents: [{
+            role: "user",
+            parts: [{ text: `以下のレシピ内容を、重要な材料と手順のポイントがわかるように150字程度で簡潔に要約してください。\n\n---\n${text}` }]
+        }]
+    };
+
+    try {
+        // メソッドの呼び出し部分を修正
+        const genAI = vertex_ai.getGenerativeModel({ model: 'gemini-1.5-flash-001' });
+        const [response] = await genAI.generateContent({
+            model: modelName,
+            contents: request.contents,
+        });
+
+        // レスポンスの構造に合わせて修正
+        return response.candidates[0].content.parts[0].text;
+
+    } catch (err) {
+        // エラーログをより詳細に出力
+        console.error('Summarize Error:', err.details || err.message);
+        throw new Error('AIによる要約に失敗しました。');
+    }
 }
+
+
