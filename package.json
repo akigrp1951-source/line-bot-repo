@@ -1,0 +1,9 @@
+{
+  "dependencies": {
+    "@google-cloud/functions-framework": "^3.0.0",
+    "@google-cloud/vertexai": "^1.0.0",
+    "@line/bot-sdk": "^8.4.1",
+    "google-auth-library": "^9.11.0",
+    "googleapis": "^137.1.0"
+  }
+}
