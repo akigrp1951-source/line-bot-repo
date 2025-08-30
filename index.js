@@ -6,7 +6,7 @@ const { VertexAI } = require('@google-cloud/vertexai'); // 忘れずにインポ
 
 // --- 設定項目 ---
 const LINE_CONFIG = {
-  channelAccessToken: process.env.CHANNEL_ACCESS_TOKEN || 'YOUR_CHANNEL_ACCESS_TOKEN',
+  channelAccessToken: process.env.CHANNEL_ACCESS_TOKEN || 'AuCCaWUqCo5ZGG+ANwEy+KrNziz2sLG+8gFRJrjdak3H0BpdTfipVfdXcn6opp9FB2tCb3Ma3EWBCeMZadQ7MUHwKl0EL1muoSLyy6VtskjN5lD8Vp6fbT5HkQpXxw8Xy2ZUUnTBRaq/8AiMId0b3wdB04t89/1O/w1cDnyilFU=',
 };
 
 const DRIVE_CONFIG = {
@@ -192,3 +192,4 @@ async function summarizeText(text) {
     throw new Error('AIによる要約に失敗しました。');
   }
 }
+
