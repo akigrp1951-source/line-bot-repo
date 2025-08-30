@@ -1,10 +1,13 @@
-// package.json
 {
-  "main": "index.js",
+  "name": "line-bot-reply-seoul-akikosan",
+  "version": "1.0.0",
+  "private": true,
+  "engines": { "node": ">=18" },
+  "dependencies": {
+    "@line/bot-sdk": "^7.5.2",
+    "functions-framework": "^3.4.0"
+  },
   "scripts": {
     "start": "functions-framework --target=webhook --port=8080"
-  },
-  "dependencies": {
-    "@google-cloud/functions-framework": "^3.4.0"
   }
 }
