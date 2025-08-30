@@ -6,7 +6,5 @@
   "dependencies": {
     "@google-cloud/functions-framework": "^3.0.0"
   },
-  "engines": {
-    "node": ">=18"
-  }
+  "engines": { "node": ">=18" }
 }
