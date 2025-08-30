@@ -1,6 +1,4 @@
 {
-  "name": "line-webhook-receiver",
-  "private": true,
   "main": "index.js",
   "scripts": {
     "start": "functions-framework --target=webhook --port=8080"
