@@ -5,6 +5,7 @@ const crypto = require('crypto');
 
 const TOKEN = process.env.LINE_ACCESS_TOKEN;
 const CHANNEL_SECRET = process.env.LINE_CHANNEL_SECRET;
+const REV = process.env.K_REVISION || 'local'; // ★ どのリビジョンが応答したか表示用
 
 function verifySignature(req) {
   try {
@@ -42,7 +43,8 @@ functions.http('webhook', async (req, res) => {
     if (ev?.deliveryContext?.isRedelivery) return;
     if (ev.type === 'message' && ev.message?.type === 'text') {
       const t = (ev.message.text || '').trim();
-      return reply(ev.replyToken, `【COMECAFE-ONLY】 ${t}`);
+      // ここが返れば “comecafe” のこのリビジョンが動いている証拠
+      return reply(ev.replyToken, `【COMECAFE-ONLY @ ${REV}】 ${t}`);
     }
   }));
 
