@@ -114,37 +114,55 @@ async function handleInventory(keyword) {
   }
 }
 
+
 // --- レシピ検索 ---
 async function handleRecipe(keyword) {
   if (!keyword) return '料理名を指定してください。';
   try {
+    console.log(`[デバッグ] レシピ検索を開始します。キーワード: ${keyword}`);
     const file = await findRecipeFile(keyword);
-    if (!file) return '該当するレシピが見つかりませんでした。';
+
+    if (!file) {
+      console.log('[デバッグ] findRecipeFileでファイルが見つかりませんでした。');
+      return '該当するレシピが見つかりませんでした。';
+    }
+    console.log(`[デバッグ] ファイルが見つかりました: ${file.name} (ID: ${file.id})`);
 
     const content = await getFileContent(file.id);
-    if (!content) return `【${file.name}】\n\n(本文を読めない形式です)\n${file.webViewLink}`;
+    if (!content) {
+      console.log('[デバッグ] getFileContentで本文を取得できませんでした。');
+      return `【${file.name}】\n\n(本文を読めない形式です)\n${file.webViewLink}`;
+    }
+    console.log('[デバッグ] ファイル本文を取得しました。AI要約を開始します。');
 
     const summary = await summarizeText(content);
-    return `【${file.name}】\n\n【AI要約】\n${summary}\n\nリンク:\n${file.webViewLink}`;
+    console.log('[デバッグ] AI要約が完了しました。');
+    
+    const reply = `【${file.name}】\n\n【AI要約】\n${summary}\n\nリンク:\n${file.webViewLink}`;
+    console.log('[デバッグ] 返信メッセージを作成しました。');
+    return reply;
+
   } catch (err) {
     console.error('Recipe Error:', err.message);
+    // エラーの詳細もログに出力
+    if (err.stack) {
+        console.error(err.stack);
+    }
     return 'レシピの検索・要約中にエラーが発生しました。';
   }
 }
 
 async function findRecipeFile(keyword) {
+  console.log(`[デバッグ] Drive APIを呼び出します。q: '${DRIVE_CONFIG.recipeFolderId}' in parents and name contains '${keyword}'`);
   const response = await drive.files.list({
     q: `'${DRIVE_CONFIG.recipeFolderId}' in parents and name contains '${keyword}' and trashed = false`,
     fields: 'files(id, name, webViewLink)',
     pageSize: 1,
   });
+  console.log(`[デバッグ] Drive APIの応答: ${JSON.stringify(response.data)}`);
   return response.data.files[0];
 }
 
-async function getFileContent(fileId) {
-  const response = await drive.files.export({ fileId, mimeType: 'text/plain' });
-  return response.data;
-}
 
 // --- AI要約 ---
 async function summarizeText(text) {
@@ -160,3 +178,4 @@ async function summarizeText(text) {
         throw new Error('AIによる要約に失敗しました。');
     }
 }
+
