@@ -1,184 +1,83 @@
-// index.js
-const functions = require('@google-cloud/functions-framework');
-const https = require('https');
-const crypto = require('crypto');
+cat > index.js <<'EOF'
 const { GoogleAuth } = require('google-auth-library');
 
-const TOKEN = process.env.LINE_ACCESS_TOKEN || '';
-const CHANNEL_SECRET = process.env.LINE_CHANNEL_SECRET || '';
+// LINE のチャネルアクセストークン（Cloud Run の環境変数に設定してある想定）
+const LINE_TOKEN = process.env.LINE_CHANNEL_ACCESS_TOKEN;
 
-// ---------- utils ----------
-function normalizeForPrefix(s) {
-  // 全角・半角を正規化して、先頭の不可視文字や空白を落とす
-  return String(s || '')
-    .normalize('NFKC')
-    .replace(/^[\u200B-\u200D\uFEFF\s]+/, '');
-}
-
-function verifySignature(req) {
-  try {
-    const signature = req.get('x-line-signature') || '';
-    const raw = req.rawBody ? req.rawBody : Buffer.from(JSON.stringify(req.body || {}));
-    const expected = crypto.createHmac('sha256', CHANNEL_SECRET).update(raw).digest('base64');
-    return signature === expected;
-  } catch (e) {
-    console.error('signature-verify-error ' + (e?.stack || e));
-    return false;
-  }
-}
-
-// ---------- LINE reply ----------
-function reply(replyToken, text) {
-  if (!TOKEN) {
-    console.error('Missing env LINE_ACCESS_TOKEN');
-    return Promise.resolve();
-  }
-  const payload = JSON.stringify({
-    replyToken,
-    messages: [{ type: 'text', text }],
+// ---- Vertex AI (Gemini) を呼ぶ ----
+async function generateWithGemini(promptText) {
+  const auth = new GoogleAuth({
+    scopes: ['https://www.googleapis.com/auth/cloud-platform'],
   });
+  const client = await auth.getClient();
+  const projectId =
+    process.env.GOOGLE_CLOUD_PROJECT ||
+    process.env.GCLOUD_PROJECT ||
+    (await auth.getProjectId());
 
-  const opt = {
-    hostname: 'api.line.me',
-    path: '/v2/bot/message/reply',
+  const location = 'asia-northeast3';
+  const model = 'gemini-1.5-flash-latest';
+  const url = `https://${location}-aiplatform.googleapis.com/v1/projects/${projectId}/locations/${location}/publishers/google/models/${model}:generateContent`;
+
+  const body = {
+    contents: [{ role: 'user', parts: [{ text: promptText }]}],
+    generationConfig: { temperature: 0.6, topP: 0.95, maxOutputTokens: 512 },
+  };
+
+  const res = await client.request({ url, method: 'POST', data: body });
+  const parts = res.data?.candidates?.[0]?.content?.parts || [];
+  const text = parts.map(p => p.text || '').join('').trim();
+  return text || '（AIの応答が空でした）';
+}
+
+// ---- LINE に返信 ----
+async function replyLine(replyToken, text) {
+  const res = await fetch('https://api.line.me/v2/bot/message/reply', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${TOKEN}`,
-      'Content-Length': Buffer.byteLength(payload),
+      Authorization: `Bearer ${LINE_TOKEN}`,
     },
-  };
-
-  return new Promise((resolve) => {
-    const rq = https.request(opt, (rs) => {
-      const chunks = [];
-      rs.on('data', (c) => chunks.push(c));
-      rs.on('end', () => {
-        const body = Buffer.concat(chunks).toString();
-        console.log('Reply API:', rs.statusCode, body); // textPayload に必ず出る形
-        resolve();
-      });
-    });
-    rq.on('error', (err) => {
-      console.error('line-reply-error', err);
-      resolve();
-    });
-    rq.write(payload);
-    rq.end();
+    body: JSON.stringify({
+      replyToken,
+      messages: [{ type: 'text', text }],
+    }),
   });
+  const body = await res.text();
+  console.log('Reply API:', res.status, body);
 }
 
-// ---------- Gemini (Vertex AI) ----------
-async function askGemini(prompt) {
-  const project =
-    process.env.GCP_PROJECT ||
-    process.env.GCLOUD_PROJECT ||
-    process.env.GOOGLE_CLOUD_PROJECT;
+// ai: プレフィックス判定
+function wantsAI(t) { return /^ai[:：]\s*/i.test((t||'').trim()); }
+function stripAI(t) { return (t||'').trim().replace(/^ai[:：]\s*/i, '').trim(); }
 
-  const url = `https://asia-northeast3-aiplatform.googleapis.com/v1/projects/${project}/locations/asia-northeast3/publishers/google/models/gemini-1.5-flash:generateContent`;
-
-  try {
-    const auth = new GoogleAuth({ scopes: ['https://www.googleapis.com/auth/cloud-platform'] });
-    const client = await auth.getClient();
-    const tokenObj = await client.getAccessToken();
-    const token = typeof tokenObj === 'object' ? tokenObj.token : tokenObj;
-
-    const body = JSON.stringify({
-      contents: [{ role: 'user', parts: [{ text: prompt }]}],
-      generationConfig: { maxOutputTokens: 512, temperature: 0.7 },
-    });
-
-    const u = new URL(url);
-    return await new Promise((resolve) => {
-      const rq = https.request(
-        {
-          hostname: u.hostname,
-          path: u.pathname + u.search,
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${token}`,
-            'Content-Type': 'application/json',
-            'Content-Length': Buffer.byteLength(body),
-          },
-        },
-        (rs) => {
-          const chunks = [];
-          rs.on('data', (c) => chunks.push(c));
-          rs.on('end', () => {
-            const txt = Buffer.concat(chunks).toString();
-            try {
-              const j = JSON.parse(txt);
-              const out =
-                j.candidates?.[0]?.content?.parts?.map((p) => p.text).join('') || '(no answer)';
-              resolve(out);
-            } catch (e) {
-              console.error('gemini-json-parse', e, txt);
-              resolve('(error)');
-            }
-          });
-        }
-      );
-      rq.on('error', (e) => {
-        console.error('gemini-request', e);
-        resolve('(error)');
-      });
-      rq.write(body);
-      rq.end();
-    });
-  } catch (e) {
-    console.error('gemini-auth', e);
-    return '(error)';
+// ---- エクスポート（functions-framework が見る関数）----
+exports.webhook = async (req, res) => {
+  // ヘルスチェックなど GET は 200 を返す
+  if (req.method !== 'POST') {
+    res.status(200).send('ok');
+    return;
   }
-}
 
-// 先頭が ai: / ai： / ai<スペース> なら AI 分岐（不可視文字も許容）
-const AI_PREFIX_RE = /^[\u200B-\u200D\uFEFF\s]*ai(?:[:：]|\s)/i;
-
-// ---------- HTTP entry ----------
-functions.http('webhook', async (req, res) => {
-  try {
-    if (req.method === 'GET') return res.status(200).send('OK');
-    if (req.method !== 'POST') return res.status(200).send('OK');
-
-    if (!verifySignature(req)) {
-      console.error('unauthorized-signature');
-      return res.status(401).send('unauthorized');
-    }
-
-    const events = req.body?.events;
-    if (!Array.isArray(events)) return res.status(200).send('OK');
-
-    await Promise.all(
-      events.map(async (ev) => {
+  const events = (req.body && req.body.events) || [];
+  await Promise.all(events.map(async (ev) => {
+    if (ev.type === 'message' && ev.message?.type === 'text') {
+      const text = ev.message.text || '';
+      if (wantsAI(text)) {
+        const prompt = stripAI(text) || 'こんにちは';
         try {
-          if (ev?.deliveryContext?.isRedelivery) return;
-
-          if (ev.type === 'message' && ev.message?.type === 'text') {
-            const raw = ev.message.text || '';
-            const t = normalizeForPrefix(raw);
-            const isAI = AI_PREFIX_RE.test(t);
-
-            // textPayload 側に確実に出すため JSON.stringify で文字列化
-            console.log('msg ' + JSON.stringify({ raw, normalized: t, isAI }));
-
-            if (isAI) {
-              const prompt = t
-                .replace(/^[\u200B-\u200D\uFEFF\s]*ai(?:[:：]|\s)*/i, '')
-                .trim() || 'こんにちは';
-              const ans = await askGemini(prompt);
-              return reply(ev.replyToken, ans.slice(0, 4900));
-            }
-            return reply(ev.replyToken, `Echo: ${raw}`);
-          }
+          const ai = await generateWithGemini(prompt);
+          await replyLine(ev.replyToken, ai);
         } catch (e) {
-          console.error('event-handler-error', e);
+          console.error('Vertex AI error:', e);
+          await replyLine(ev.replyToken, 'AI 呼び出しでエラーが発生しました。権限や API 有効化を確認してください。');
         }
-      })
-    );
+      } else {
+        await replyLine(ev.replyToken, `Echo: ${text}`);
+      }
+    }
+  }));
 
-    return res.status(200).send('OK');
-  } catch (e) {
-    console.error('handler-top-error', e);
-    return res.status(200).send('OK');
-  }
-});
+  res.status(200).send('OK');
+};
+EOF
