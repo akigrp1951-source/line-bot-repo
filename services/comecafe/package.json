@@ -1,3 +1,4 @@
+cat > package.json <<'EOF'
 {
   "name": "line-bot-reply-seoul-comecafe",
   "version": "1.0.0",
@@ -5,10 +6,10 @@
   "main": "index.js",
   "engines": { "node": ">=18" },
   "dependencies": {
-    "@google-cloud/functions-framework": "^3.4.0",
-    "google-auth-library": "^9.0.0"
+    "@google-cloud/functions-framework": "^3.4.0"
   },
   "scripts": {
-    "start": "functions-framework --target=webhook --port=8080"
+    "start": "functions-framework --target=webhook"
   }
 }
+EOF
