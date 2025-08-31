@@ -7,7 +7,6 @@
     "functions-framework": "^3.4.0",
     "google-auth-library": "^9.0.0"
   },
-  "scripts": {
-    "start": "functions-framework --target=webhook --port=8080"
-  }
+"scripts": { "start": "node server.js" }
+
 }
