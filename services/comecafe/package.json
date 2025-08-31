@@ -1,4 +1,3 @@
-cat > package.json <<'EOF'
 {
   "name": "line-bot-reply-seoul-comecafe",
   "version": "1.0.0",
@@ -12,4 +11,3 @@ cat > package.json <<'EOF'
     "start": "functions-framework --target=webhook"
   }
 }
-EOF
