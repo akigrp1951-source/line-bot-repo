@@ -9,6 +9,6 @@
     "google-auth-library": "^9.0.0"
   },
   "scripts": {
-    "start": "functions-framework --target=webhook --signature-type=http"
+    "start": "functions-framework --target=webhook --port=8080"
   }
 }
