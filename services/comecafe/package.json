@@ -2,9 +2,13 @@
   "name": "line-bot-reply-seoul-comecafe",
   "version": "1.0.0",
   "private": true,
+  "main": "index.js",
   "engines": { "node": ">=18" },
   "dependencies": {
+    "@google-cloud/functions-framework": "^3.4.0",
     "google-auth-library": "^9.0.0"
   },
-  "scripts": { "start": "node server.js" }
+  "scripts": {
+    "start": "functions-framework --target=webhook --signature-type=http"
+  }
 }
