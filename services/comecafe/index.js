@@ -1,145 +1,89 @@
-// index.js
-const functions = require('@google-cloud/functions-framework');
-const https = require('https');
-const crypto = require('crypto');
+cd ~/line-bot
+
+cat > index.js <<'EOF'
+'use strict';
+
 const { GoogleAuth } = require('google-auth-library');
+const functions = require('@google-cloud/functions-framework');
 
-const TOKEN = process.env.LINE_CHANNEL_ACCESS_TOKEN;
-const CHANNEL_SECRET = process.env.LINE_CHANNEL_SECRET;
-
-// 可変にする（デプロイ時の環境変数で指定）
+const LINE_TOKEN = process.env.LINE_CHANNEL_ACCESS_TOKEN;
 const GEMINI_LOCATION = process.env.GEMINI_LOCATION || 'asia-northeast1';
 const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-1.5-flash-002';
 
-// --- 署名検証 ---
-function verifySignature(req) {
-  try {
-    const signature = req.get('x-line-signature') || '';
-    const raw = req.rawBody ? req.rawBody : Buffer.from(JSON.stringify(req.body));
-    const expected = crypto.createHmac('sha256', CHANNEL_SECRET).update(raw).digest('base64');
-    return signature === expected;
-  } catch (e) {
-    console.error('signature-verify-error', e);
-    return false;
-  }
-}
+async function callGemini(prompt) {
+  const project = process.env.GOOGLE_CLOUD_PROJECT;
+  const url = `https://${GEMINI_LOCATION}-aiplatform.googleapis.com/v1/projects/${project}/locations/${GEMINI_LOCATION}/publishers/google/models/${GEMINI_MODEL}:generateContent`;
 
-// --- LINE 返信 ---
-function reply(replyToken, text) {
-  if (!TOKEN) { console.error('Missing env LINE_CHANNEL_ACCESS_TOKEN'); return Promise.resolve(); }
-  const payload = JSON.stringify({ replyToken, messages: [{ type: 'text', text }] });
-  const opt = {
-    hostname: 'api.line.me',
-    path: '/v2/bot/message/reply',
+  const auth = new GoogleAuth({ scopes: ['https://www.googleapis.com/auth/cloud-platform'] });
+  const client = await auth.getClient();
+  const token = await client.getAccessToken();
+
+  const body = {
+    contents: [{ role: 'user', parts: [{ text: prompt }]}],
+    generationConfig: { maxOutputTokens: 256 }
+  };
+
+  const r = await fetch(url, {
     method: 'POST',
     headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${TOKEN}`,
-      'Content-Length': Buffer.byteLength(payload)
-    }
-  };
-  return new Promise((resolve) => {
-    const rq = https.request(opt, (rs) => {
-      const chunks = [];
-      rs.on('data', c => chunks.push(c));
-      rs.on('end', () => {
-        const body = Buffer.concat(chunks).toString();
-        console.log('Reply API:', rs.statusCode, body);
-        resolve();
-      });
-    });
-    rq.on('error', (err) => { console.error('line-reply-error', err); resolve(); });
-    rq.write(payload);
-    rq.end();
+      Authorization: `Bearer ${token.token || token}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(body)
   });
-}
 
-// --- Gemini（Vertex AI） ---
-async function askGemini(prompt) {
-  try {
-    const project = process.env.GCP_PROJECT || process.env.GCLOUD_PROJECT;
-    const url = `https://${GEMINI_LOCATION}-aiplatform.googleapis.com/v1/projects/${project}/locations/${GEMINI_LOCATION}/publishers/google/models/${GEMINI_MODEL}:generateContent`;
-
-    const auth = new GoogleAuth({ scopes: ['https://www.googleapis.com/auth/cloud-platform'] });
-    const client = await auth.getClient();
-    const tokenObj = await client.getAccessToken();
-    const token = typeof tokenObj === 'object' ? tokenObj.token : tokenObj;
-
-    const body = JSON.stringify({
-      contents: [{ role: 'user', parts: [{ text: prompt }]}],
-      generationConfig: { maxOutputTokens: 512, temperature: 0.7 }
-    });
-
-    return await new Promise((resolve) => {
-      const u = new URL(url);
-      const rq = https.request({
-        hostname: u.hostname,
-        path: u.pathname + u.search,
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-          'Content-Length': Buffer.byteLength(body)
-        }
-      }, (rs) => {
-        const chunks = [];
-        rs.on('data', c => chunks.push(c));
-        rs.on('end', () => {
-          const txt = Buffer.concat(chunks).toString();
-          if (rs.statusCode !== 200) {
-            console.error('gemini-non200', rs.statusCode, txt);
-            return resolve('(Gemini API error)');
-          }
-          try {
-            const j = JSON.parse(txt);
-            const out = j.candidates?.[0]?.content?.parts?.map(p => p.text).join('') || '(no answer)';
-            resolve(out);
-          } catch (e) {
-            console.error('gemini-json-parse', e, txt);
-            resolve('(parse error)');
-          }
-        });
-      });
-      rq.on('error', (e) => { console.error('gemini-request', e); resolve('(request error)'); });
-      rq.write(body);
-      rq.end();
-    });
-  } catch (e) {
-    console.error('askGemini-fatal', e);
-    return '(fatal error)';
+  if (!r.ok) {
+    const t = await r.text();
+    console.log('gemini-non200', r.status, t);
+    throw new Error(`Gemini ${r.status}`);
   }
+
+  const j = await r.json();
+  const text = j?.candidates?.[0]?.content?.parts?.[0]?.text ?? '(空の応答)';
+  return text.trim();
 }
 
-// --- Webhook ---
+async function replyLine(replyToken, text) {
+  const r = await fetch('https://api.line.me/v2/bot/message/reply', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${LINE_TOKEN}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ replyToken, messages: [{ type: 'text', text }] })
+  });
+  const txt = await r.text();
+  console.log('Reply API:', r.status, txt);
+}
+
 functions.http('webhook', async (req, res) => {
-  if (req.method === 'GET') return res.status(200).send('OK');
-  if (req.method !== 'POST') return res.status(200).send('OK');
+  if (req.method !== 'POST') return res.status(405).send('Method Not Allowed');
+  const events = req.body?.events || [];
 
-  if (!CHANNEL_SECRET) {
-    console.error('Missing env LINE_CHANNEL_SECRET');
-    return res.status(500).send('Missing config');
-  }
-  if (!verifySignature(req)) return res.status(401).send('unauthorized');
+  for (const ev of events) {
+    try {
+      if (ev.type === 'message' && ev.message?.type === 'text') {
+        const raw = ev.message.text || '';
+        console.log('incoming-text:', raw);
 
-  const events = req.body?.events;
-  if (!Array.isArray(events)) return res.status(200).send('OK');
-
-  await Promise.all(events.map(async (ev) => {
-    if (ev?.deliveryContext?.isRedelivery) return;
-    if (ev.type === 'message' && ev.message?.type === 'text') {
-      const t = (ev.message.text || '').trim();
-      console.log('incoming-text:', JSON.stringify({ t }));
-
-      // "ai:"で始まったらGeminiへ
-      if (/^ai:/i.test(t)) {
-        const prompt = t.replace(/^ai:/i, '').trim() || 'こんにちは';
-        const ans = await askGemini(prompt);
-        return reply(ev.replyToken, ans.slice(0, 4900));
+        if (/^ai:\s*/i.test(raw)) {
+          const prompt = raw.replace(/^ai:\s*/i, '').trim();
+          let answer;
+          try {
+            answer = await callGemini(prompt);
+          } catch (e) {
+            answer = '（Gemini 呼び出しでエラーが発生しました）';
+          }
+          await replyLine(ev.replyToken, answer);
+        } else {
+          await replyLine(ev.replyToken, `Echo: ${raw}`);
+        }
       }
-      // それ以外はエコー
-      return reply(ev.replyToken, `Echo: ${t}`);
+    } catch (e) {
+      console.error('event-error', e);
     }
-  })).catch((e) => console.error('handler-error', e));
+  }
 
-  return res.status(200).send('OK');
+  res.status(200).json({ ok: true });
 });
+EOF
