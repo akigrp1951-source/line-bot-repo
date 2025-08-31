@@ -4,9 +4,7 @@
   "private": true,
   "engines": { "node": ">=18" },
   "dependencies": {
-    "functions-framework": "^3.4.0",
     "google-auth-library": "^9.0.0"
   },
-"scripts": { "start": "node server.js" }
-
+  "scripts": { "start": "node server.js" }
 }
